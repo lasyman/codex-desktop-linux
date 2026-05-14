@@ -36,6 +36,10 @@ function copilotReasoningEffortModelListFixture() {
   return "function Ge(){let s=`copilot`,d={};return e.forEach(e=>{let t=s===`copilot`?[e.supportedReasoningEfforts.find(Ue)??{reasoningEffort:`medium`,description:`medium effort`}]:[...e.supportedReasoningEfforts];d.models.push({...e,supportedReasoningEfforts:t})})}";
 }
 
+function currentCopilotReasoningEffortModelListFixture() {
+  return "function Ge(){let t=`copilot`;return r.forEach(e=>{let n=t===`copilot`?[e.supportedReasoningEfforts.find(e=>e.reasoningEffort===`medium`)??{reasoningEffort:`medium`,description:`medium effort`}]:[...e.supportedReasoningEfforts];i.push({...e,supportedReasoningEfforts:n})})}";
+}
+
 function copilotReasoningEffortUiFixture() {
   return [
     "function qU(){let E=o?.authMethod===`copilot`,D=ZH(T,f.model),O=QH(f.reasoningEffort,D),le=D.map(e=>{let{reasoningEffort:t}=e;return(0,$.jsx)(jm.Item,{\"data-reasoning-selected\":t===O?`true`:void 0,disabled:E,RightIcon:t===O?rg:void 0,onSelect:()=>{i.get(bh).log({eventName:`codex_composer_reasoning_effort_changed`,metadata:{reasoning_effort:t}}),p(f.model,t),H()},children:(0,$.jsx)(nM,{effort:t})},t)})}",
@@ -107,6 +111,17 @@ test("keeps all model reasoning efforts available for Copilot auth", () => {
   assert.doesNotMatch(patched, /description:`medium effort`/);
 });
 
+test("keeps all model reasoning efforts for current Copilot model query chunks", () => {
+  const patched = applyPatchTwice(
+    applyCopilotReasoningEffortModelListPatch,
+    currentCopilotReasoningEffortModelListFixture(),
+  );
+
+  assert.match(patched, /let n=\[\.\.\.e\.supportedReasoningEfforts\]/);
+  assert.doesNotMatch(patched, /t===`copilot`\?\[/);
+  assert.doesNotMatch(patched, /description:`medium effort`/);
+});
+
 test("allows Copilot auth to change reasoning effort from the UI", () => {
   const patched = applyPatchTwice(
     applyCopilotReasoningEffortUiPatch,
@@ -150,8 +165,8 @@ test("enabled feature descriptors patch matching webview assets", () => {
 
   withTempFeatureConfig(["copilot-reasoning-effort"], () => {
     withTempDir((extractedDir) => {
-      writeAsset(extractedDir, "use-model-settings-fixture.js", copilotReasoningEffortSettingsFixture());
-      writeAsset(extractedDir, "font-settings-fixture.js", copilotReasoningEffortModelListFixture());
+      writeAsset(extractedDir, "use-collaboration-mode-fixture.js", copilotReasoningEffortSettingsFixture());
+      writeAsset(extractedDir, "model-queries-fixture.js", currentCopilotReasoningEffortModelListFixture());
       writeAsset(extractedDir, "index-fixture.js", copilotReasoningEffortUiFixture());
 
       const descriptors = normalizePatchDescriptors(
@@ -160,11 +175,11 @@ test("enabled feature descriptors patch matching webview assets", () => {
       applyWebviewAssetPatchDescriptors(extractedDir, descriptors, {}, null);
 
       assert.match(
-        readAsset(extractedDir, "use-model-settings-fixture.js"),
+        readAsset(extractedDir, "use-collaboration-mode-fixture.js"),
         /copilot-default-reasoning-effort/,
       );
       assert.match(
-        readAsset(extractedDir, "font-settings-fixture.js"),
+        readAsset(extractedDir, "model-queries-fixture.js"),
         /\[\.\.\.e\.supportedReasoningEfforts\]/,
       );
       assert.match(
