@@ -63,6 +63,7 @@ const {
 } = require("./ci/validate-patch-report.js");
 const {
   applyPersistentRateLimitFooterPatch,
+  applyLinuxAppServerFeatureEnablementPatch,
 } = require("./patches/webview-assets.js");
 const { patchAssetFiles } = require("./patches/shared.js");
 
@@ -292,6 +293,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-hotkey-window-prewarm",
     "linux-git-origins-source-fallback",
     "linux-app-sunset-gate",
+    "linux-app-server-feature-enablement",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
     "opaque-window-default-resolved-theme",
@@ -1259,6 +1261,62 @@ test("warns when the app sunset key is present but the gate shape drifts", () =>
   assert.equal(patched, appSunsetBundleWithDriftingGateFixture());
   assert.deepEqual(warnings, [
     "WARN: Could not find app sunset gate needle — skipping Linux app sunset patch",
+  ]);
+});
+
+test("removes unsupported features from default app-server feature sync", () => {
+  const source = [
+    "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];",
+    "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
+    "return e[0]!==r?(a=()=>{let r=qF(n);qn(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:r}).catch(n=>{q.error(`Failed to sync experimental feature enablement`,{sensitive:{error:n}})})},o=[r],e[0]=r,e[1]=a,e[2]=o):(a=e[1],o=e[2]),null}",
+    "function qF(e){let t={};for(let n of GF){let r=e[n];r!=null&&(t[n]=r)}return t}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
+
+  assert.match(
+    patched,
+    /var GF=\[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`\];/,
+  );
+  assert.doesNotMatch(patched, /`auth_elicitation`/);
+  assert.doesNotMatch(patched, /`enable_mcp_apps`/);
+  assert.doesNotMatch(patched, /,te\]/);
+});
+
+test("patches the matched app-server feature sync array when an identical array appears earlier", () => {
+  const unsupportedFeatureArray =
+    "var GF=[`apps`,`auth_elicitation`,`enable_mcp_apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`,te];";
+  const supportedFeatureArray =
+    "var GF=[`apps`,`memories`,`plugins`,`tool_call_mcp_elicitation`,`tool_search`,`tool_suggest`];";
+  const source = [
+    unsupportedFeatureArray,
+    "function OF(){return GF}",
+    unsupportedFeatureArray,
+    "function KF(){let e=(0,Z.c)(6),t=K(G),[n]=ts(`statsig_default_enable_features`),r=Lc(),i=Io(),a,o;",
+    "return e[0]!==r?(a=()=>{let r=qF(n);qn(`set-experimental-feature-enablement-for-host`,{hostId:t,enablement:r})},o=[r],e[0]=r,e[1]=a,e[2]=o):(a=e[1],o=e[2]),null}",
+  ].join("");
+
+  const patched = applyPatchTwice(applyLinuxAppServerFeatureEnablementPatch, source);
+
+  assert.equal(patched.indexOf(unsupportedFeatureArray), 0);
+  assert.match(patched, new RegExp(`${escapeRegExp(unsupportedFeatureArray)}function OF`));
+  assert.match(patched, new RegExp(`function OF\\(\\)\\{return GF\\}${escapeRegExp(supportedFeatureArray)}function KF`));
+});
+
+test("warns when app-server feature sync still has unsupported features but the list shape drifts", () => {
+  const source = [
+    "var GF=new Set([`apps`,unsupportedAuthFeature]);",
+    "function KF(){let e=ts(`statsig_default_enable_features`);",
+    "return qn(`set-experimental-feature-enablement-for-host`,{enablement:{name:`auth_elicitation`}})}",
+  ].join("");
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxAppServerFeatureEnablementPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.deepEqual(warnings, [
+    "WARN: Could not find app-server feature enablement list — skipping unsupported feature compatibility patch",
   ]);
 });
 
