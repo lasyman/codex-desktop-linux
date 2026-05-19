@@ -182,18 +182,12 @@ function applyAssistantRenderPatch(source) {
 }
 
 function applySettingsPatch(source) {
-  if (source.includes(SETTINGS_KEY)) {
-    return source;
-  }
-  const keyNeedle = "warmStart:\"codex-linux-warm-start-enabled\"";
-  const keyReplacement = `warmStart:"codex-linux-warm-start-enabled",readAloud:${JSON.stringify(SETTINGS_KEY)}`;
-  const rowNeedle = '$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."})';
-  const rowReplacement = `${rowNeedle},$.jsx(LinuxToggle,{settingKey:KEYS.readAloud,label:"Read aloud responses",description:"Show a Read aloud button on assistant responses.",defaultValue:!1})`;
-  if (!source.includes(keyNeedle) || !source.includes(rowNeedle)) {
-    warn("Could not find Linux settings toggle insertion point", "read aloud settings patch");
-    return source;
-  }
-  return source.replace(keyNeedle, keyReplacement).replace(rowNeedle, rowReplacement);
+  return source
+    .replace(`,readAloud:${JSON.stringify(SETTINGS_KEY)}`, "")
+    .replace(
+      ',$.jsx(LinuxToggle,{settingKey:KEYS.readAloud,label:"Read aloud responses",description:"Show a Read aloud button on assistant responses.",defaultValue:!1})',
+      "",
+    );
 }
 
 function generalSettingsReadAloudRowSource() {
@@ -222,17 +216,10 @@ function replaceExistingGeneralSettingsReadAloudRow(source) {
   return `${source.slice(0, start)}${generalSettingsReadAloudBlockSource()}${source.slice(end)}`;
 }
 
-function applyGeneralSettingsRowPlacement(source) {
-  if (source.includes(GENERAL_SETTINGS_CHILDREN_WITH_ROW)) {
-    return source;
-  }
-  if (source.includes(GENERAL_SETTINGS_CHILDREN_WITH_OLD_ROW)) {
-    return source.replace(GENERAL_SETTINGS_CHILDREN_WITH_OLD_ROW, GENERAL_SETTINGS_CHILDREN_WITH_ROW);
-  }
-  if (source.includes(GENERAL_SETTINGS_CHILDREN)) {
-    return source.replace(GENERAL_SETTINGS_CHILDREN, GENERAL_SETTINGS_CHILDREN_WITH_ROW);
-  }
-  return source;
+function removeGeneralSettingsRowPlacement(source) {
+  return source
+    .replace(GENERAL_SETTINGS_CHILDREN_WITH_ROW, GENERAL_SETTINGS_CHILDREN)
+    .replace(GENERAL_SETTINGS_CHILDREN_WITH_OLD_ROW, GENERAL_SETTINGS_CHILDREN);
 }
 
 function applyGeneralSettingsPatch(source) {
@@ -253,7 +240,7 @@ function applyGeneralSettingsPatch(source) {
   } else {
     patched = patched.replace(functionNeedle, `${generalSettingsReadAloudBlockSource()}${functionNeedle}`);
   }
-  return ensureReadAloudRuntime(applyGeneralSettingsExportPatch(applyGeneralSettingsRowPlacement(patched)));
+  return ensureReadAloudRuntime(applyGeneralSettingsExportPatch(removeGeneralSettingsRowPlacement(patched)));
 }
 
 function applyGeneralSettingsExportPatch(source) {
@@ -408,24 +395,24 @@ function patchMatchingAssets(assetsDir, pattern, apply) {
 }
 
 function applySettingsAssetPatch(extractedDir) {
+  let matched = false;
+  let changed = 0;
   const keybindsAssetPath = path.join(extractedDir, "webview", "assets", "keybinds-settings-linux.js");
   if (fs.existsSync(keybindsAssetPath)) {
     const source = fs.readFileSync(keybindsAssetPath, "utf8");
     const patched = applySettingsPatch(source);
-    if (patched === source) {
-      return { matched: true, changed: 0 };
+    matched = true;
+    if (patched !== source) {
+      fs.writeFileSync(keybindsAssetPath, patched, "utf8");
+      changed += 1;
     }
-    fs.writeFileSync(keybindsAssetPath, patched, "utf8");
-    return { matched: true, changed: 1 };
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
   if (!fs.existsSync(assetsDir)) {
-    return { matched: false, changed: 0, reason: "webview assets directory not found" };
+    return { matched, changed, reason: "webview assets directory not found" };
   }
 
-  let matched = false;
-  let changed = 0;
   const generalCandidates = fs
     .readdirSync(assetsDir)
     .filter((name) => /^general-settings-.*\.js$/.test(name))

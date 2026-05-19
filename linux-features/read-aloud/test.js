@@ -688,16 +688,24 @@ test("assistant render patch preserves the current JSX runtime alias", () => {
   assert.match(patched, /globalThis\.codexLinuxReadAloudClick\?\.\(n,p,o,e\.currentTarget\)/);
 });
 
-test("settings patch adds disabled-by-default toggle", () => {
+test("settings patch does not add the legacy normal settings toggle", () => {
   const source = 'KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled"};$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."})';
   const patched = twice(applySettingsPatch, source);
-  assert.match(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
-  assert.match(patched, /label:"Read aloud responses"/);
-  assert.match(patched, /Show a Read aloud button/);
-  assert.match(patched, /defaultValue:!1/);
+  assert.equal(patched, source);
+  assert.doesNotMatch(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
+  assert.doesNotMatch(patched, /label:"Read aloud responses"/);
 });
 
-test("general settings patch adds current upstream read aloud toggle", () => {
+test("settings patch removes an older legacy normal settings toggle", () => {
+  const source = 'KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled",readAloud:"codex-linux-read-aloud-enabled"};$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."}),$.jsx(LinuxToggle,{settingKey:KEYS.readAloud,label:"Read aloud responses",description:"Show a Read aloud button on assistant responses.",defaultValue:!1})';
+  const patched = twice(applySettingsPatch, source);
+  assert.doesNotMatch(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
+  assert.doesNotMatch(patched, /label:"Read aloud responses"/);
+  assert.match(patched, /KEYS=\{promptWindow/);
+  assert.match(patched, /Warm start/);
+});
+
+test("general settings patch exports read aloud page without rendering it in General", () => {
   const source = "function Gn(){return (0,$.jsxs)(ht,{children:[S,C,w,T,D,O,k,A,j,M,N,P,L]})}";
   const patched = twice(applyGeneralSettingsPatch, source);
   assert.match(patched, /function codexLinuxReadAloudSettingsRow/);
@@ -721,13 +729,14 @@ test("general settings patch adds current upstream read aloud toggle", () => {
   assert.match(patched, /kokoro-explicit-v5/);
   assert.match(patched, /globalThis\.codexLinuxReadAloudSetup=setup/);
   assert.doesNotThrow(() => new Function("$", "w", "C", "N", "L", "F", "P", "J", "q", patched));
-  assert.match(
+  assert.doesNotMatch(
     patched,
     /children:\[S,C,w,T,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),D,O,k,A,j,M,N,P,L\]/,
   );
+  assert.match(patched, /children:\[S,C,w,T,D,O,k,A,j,M,N,P,L\]/);
 });
 
-test("general settings patch upgrades and repositions an older injected row", () => {
+test("general settings patch upgrades and removes an older injected General row", () => {
   const source = [
     "function codexLinuxReadAloudSettingsRow(){let e=(0,Q.c)(11),t=w(C),n=N(),{data:r,isLoading:i}=L(\"codex-linux-read-aloud-enabled\"),a=r===!0,o,s;e[0]===Symbol.for(`react.memo_cache_sentinel`)?(o=(0,$.jsx)(F,{id:`settings.general.readAloud.label`,defaultMessage:`Read aloud responses`,description:`Label for Linux read aloud setting`}),s=(0,$.jsx)(F,{id:`settings.general.readAloud.description`,defaultMessage:`Show a read aloud button under assistant responses`,description:`Description for Linux read aloud setting`}),e[0]=o,e[1]=s):(o=e[0],s=e[1]);let c;e[2]===t?c=e[3]:(c=e=>{P(t,\"codex-linux-read-aloud-enabled\",e)},e[2]=t,e[3]=c);let l;e[4]===n?l=e[5]:(l=n.formatMessage({id:`settings.general.readAloud.label`,defaultMessage:`Read aloud responses`,description:`Label for Linux read aloud setting`}),e[4]=n,e[5]=l);let u;return e[6]!==i||e[7]!==a||e[8]!==c||e[9]!==l?(u=(0,$.jsx)(J,{label:o,description:s,control:(0,$.jsx)(q,{checked:a,disabled:i,onChange:c,ariaLabel:l})}),e[6]=i,e[7]=a,e[8]=c,e[9]=l,e[10]=u):u=e[10],u}",
     "function Gn(){return (0,$.jsxs)(ht,{children:[S,C,w,T,D,O,k,(0,$.jsx)(codexLinuxReadAloudSettingsRow,{}),A,j,M,N,P,L]})}",
@@ -739,7 +748,7 @@ test("general settings patch upgrades and repositions an older injected row", ()
   assert.match(patched, /settings\.general\.readAloud\.help/);
   assert.match(patched, /Speech pace/);
   assert.match(patched, /function codexLinuxReadAloudSettingsPage/);
-  assert.match(
+  assert.doesNotMatch(
     patched,
     /children:\[S,C,w,T,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),D,O,k,A,j,M,N,P,L\]/,
   );
@@ -747,6 +756,7 @@ test("general settings patch upgrades and repositions an older injected row", ()
     patched,
     /children:\[S,C,w,T,D,O,k,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),A,j,M,N,P,L\]/,
   );
+  assert.match(patched, /children:\[S,C,w,T,D,O,k,A,j,M,N,P,L\]/);
   assert.equal((patched.match(/function codexLinuxReadAloudSettingsRow/g) ?? []).length, 1);
 });
 
@@ -807,7 +817,7 @@ test("app route patch wires read aloud settings to the generated page export", (
   assert.match(patched, /"general-settings":\(0,Q\.lazy\)/);
 });
 
-test("settings asset patch updates generated keybinds settings file", () => {
+test("settings asset patch leaves current keybinds settings file alone", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-settings-"));
   try {
     const assets = path.join(root, "webview", "assets");
@@ -817,10 +827,31 @@ test("settings asset patch updates generated keybinds settings file", () => {
       asset,
       'KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled"};$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."})',
     );
+    assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 0 });
+    const patched = fs.readFileSync(asset, "utf8");
+    assert.doesNotMatch(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
+    assert.doesNotMatch(patched, /label:"Read aloud responses"/);
+    assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 0 });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("settings asset patch removes an older generated keybinds read aloud toggle", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-read-aloud-settings-"));
+  try {
+    const assets = path.join(root, "webview", "assets");
+    fs.mkdirSync(assets, { recursive: true });
+    const asset = path.join(assets, "keybinds-settings-linux.js");
+    fs.writeFileSync(
+      asset,
+      'KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled",readAloud:"codex-linux-read-aloud-enabled"};$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."}),$.jsx(LinuxToggle,{settingKey:KEYS.readAloud,label:"Read aloud responses",description:"Show a Read aloud button on assistant responses.",defaultValue:!1})',
+    );
     assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 1 });
     const patched = fs.readFileSync(asset, "utf8");
-    assert.match(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
-    assert.match(patched, /label:"Read aloud responses"/);
+    assert.doesNotMatch(patched, /readAloud:"codex-linux-read-aloud-enabled"/);
+    assert.doesNotMatch(patched, /label:"Read aloud responses"/);
+    assert.match(patched, /Warm start/);
     assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 0 });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -845,10 +876,11 @@ test("settings asset patch upgrades older general settings bundle", () => {
     assert.match(patched, /codex-linux-read-aloud-kokoro-speed/);
     assert.match(patched, /Choose folder/);
     assert.match(patched, /kokoro-explicit-v5/);
-    assert.match(
+    assert.doesNotMatch(
       patched,
       /children:\[S,C,w,T,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),D,O,k,A,j,M,N,P,L\]/,
     );
+    assert.match(patched, /children:\[S,C,w,T,D,O,k,A,j,M,N,P,L\]/);
     assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 0 });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -870,6 +902,10 @@ test("settings asset patch updates current general settings bundle", () => {
     assert.match(patched, /codex-linux-read-aloud-enabled/);
     assert.match(patched, /codexLinuxReadAloudSettingsRow/);
     assert.match(patched, /globalThis\.codexLinuxReadAloudSetup=setup/);
+    assert.doesNotMatch(
+      patched,
+      /children:\[S,C,w,T,\(0,\$\.jsx\)\(codexLinuxReadAloudSettingsRow,\{\}\),D,O,k,A,j,M,N,P,L\]/,
+    );
     assert.deepEqual(applySettingsAssetPatch(root), { matched: true, changed: 0 });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -881,6 +917,10 @@ test("settings asset patch creates a first-class read aloud settings section", (
   try {
     const assets = path.join(root, "webview", "assets");
     fs.mkdirSync(assets, { recursive: true });
+    fs.writeFileSync(
+      path.join(assets, "keybinds-settings-linux.js"),
+      'KEYS={promptWindow:"codex-linux-prompt-window-enabled",systemTray:"codex-linux-system-tray-enabled",warmStart:"codex-linux-warm-start-enabled"};$.jsx(LinuxToggle,{settingKey:KEYS.warmStart,label:"Warm start",description:"Use the running app for launch actions instead of starting a fresh Electron instance."})',
+    );
     fs.writeFileSync(
       path.join(assets, "general-settings-inner.js"),
       [
