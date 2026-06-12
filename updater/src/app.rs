@@ -1145,6 +1145,10 @@ fn complete_current_dmg_update_if_already_installed(
         return Ok(false);
     }
 
+    if state.candidate_version.is_none() {
+        return Ok(false);
+    }
+
     let Some(candidate_sha256) = state.dmg_sha256.clone() else {
         return Ok(false);
     };
@@ -1746,6 +1750,10 @@ fn notify_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     fn test_paths(root: &std::path::Path) -> RuntimePaths {
         RuntimePaths {
@@ -2085,6 +2093,52 @@ mod tests {
             assert_eq!(state.last_check_at, None);
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_check_cycle_ignores_downloaded_dmg_already_installed() -> Result<()> {
+        let server = MockServer::start().await;
+        let body = b"codex-dmg-test-payload";
+        let sha256 = "678cd508ffe0071e217020a7a4eecbebe25362c022ac78c13a5ae87b7a3a0c92";
+
+        Mock::given(method("HEAD"))
+            .and(path("/Codex.dmg"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"same-dmg\"")
+                    .insert_header("Content-Length", body.len().to_string()),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Codex.dmg"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(body.to_vec()))
+            .mount(&server)
+            .await;
+
+        let temp = tempfile::tempdir()?;
+        let paths = test_paths(temp.path());
+        paths.ensure_dirs()?;
+        let mut config = test_config(temp.path());
+        config.dmg_url = format!("{}/Codex.dmg", server.uri());
+        write_installed_build_info(&config, sha256)?;
+
+        let mut state = PersistedState::new(true);
+        run_check_cycle(&config, &mut state, &paths).await?;
+
+        let expected_dmg_path = config.workspace_root.join("downloads/Codex.dmg");
+        assert_eq!(state.status, UpdateStatus::Idle);
+        assert_eq!(state.candidate_version, None);
+        assert_eq!(state.dmg_sha256.as_deref(), Some(sha256));
+        assert_eq!(
+            state.artifact_paths.dmg_path.as_deref(),
+            Some(expected_dmg_path.as_path())
+        );
+        assert_eq!(state.artifact_paths.package_path, None);
+        assert_eq!(state.artifact_paths.workspace_dir, None);
+        assert_eq!(state.error_message, None);
+        assert!(state.last_successful_check_at.is_some());
         Ok(())
     }
 
@@ -2971,6 +3025,46 @@ mod tests {
         assert!(state
             .notified_events
             .contains("update_detected:2026.06.12.120204+51eeeba5"));
+        Ok(())
+    }
+
+    #[test]
+    fn same_dmg_recovery_keeps_ready_wrapper_update_package() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let paths = test_paths(temp.path());
+        paths.ensure_dirs()?;
+        let config = test_config(temp.path());
+        let sha256 = "51eeeba58394c4747cbc9d9fee7aa613500253fedd7ad5b114f48dfcb89a6cbb";
+        write_installed_build_info(&config, sha256)?;
+
+        let package_path = temp.path().join("dist/codex-desktop-wrapper.deb");
+        let workspace_dir = temp
+            .path()
+            .join("cache/workspaces/2026.06.12.120204+51eeeba5");
+        let wrapper_commit = "b".repeat(40);
+
+        let mut state = PersistedState::new(true);
+        state.status = UpdateStatus::ReadyToInstall;
+        state.dmg_sha256 = Some(sha256.to_string());
+        state.candidate_wrapper_commit = Some(wrapper_commit.clone());
+        state.candidate_wrapper_version = Some("0.9.0".to_string());
+        state.artifact_paths.package_path = Some(package_path.clone());
+        state.artifact_paths.workspace_dir = Some(workspace_dir.clone());
+
+        assert!(!complete_current_dmg_update_if_already_installed(
+            &config, &mut state, &paths
+        )?);
+
+        assert_eq!(state.status, UpdateStatus::ReadyToInstall);
+        assert_eq!(state.candidate_version, None);
+        assert_eq!(state.dmg_sha256.as_deref(), Some(sha256));
+        assert_eq!(
+            state.candidate_wrapper_commit.as_deref(),
+            Some(wrapper_commit.as_str())
+        );
+        assert_eq!(state.candidate_wrapper_version.as_deref(), Some("0.9.0"));
+        assert_eq!(state.artifact_paths.package_path, Some(package_path));
+        assert_eq!(state.artifact_paths.workspace_dir, Some(workspace_dir));
         Ok(())
     }
 
