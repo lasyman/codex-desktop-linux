@@ -54,6 +54,7 @@ const {
   applyLinuxBrowserUseAvailabilityPatch,
   applyLinuxBrowserUseExternalAvailabilityPatch,
   applyLinuxBrowserUseNonLocalNavigationPatch,
+  applyLinuxAppServerBackfillWaitPatch,
   applyLinuxOpaqueBackgroundPatch,
   applyLinuxFastModeModelGuardPatch,
   applyLinuxOpaqueWindowsDefaultPatch,
@@ -666,6 +667,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "automation-schedule-multi-time-rrule",
     "linux-app-sunset-gate",
     "linux-app-server-feature-enablement",
+    "linux-app-server-backfill-wait",
     "linux-config-write-version-conflict",
     "opaque-window-default-general-settings",
     "opaque-window-default-webview-index",
@@ -2606,6 +2608,23 @@ test("adds Linux launch actions after current window API drift", () => {
   assert.match(patched, /let e=M\.getPrimaryWindow\(B\),t=e\?\?await M\.createFreshWindow\(`/);
 });
 
+test("adds Linux launch actions when current upstream wraps fresh window creation", () => {
+  const source = currentLaunchActionBundleFixture()
+    .replaceAll("createFreshLocalWindow", "createFreshWindow")
+    .replace(
+      "let A=Date.now(),w=()=>{}",
+      "let enabled=!0,ee=e=>enabled?M.createFreshWindow(e):Promise.resolve(null),A=Date.now(),w=()=>{}",
+    )
+    .replace("M.getPrimaryWindow()??await M.createFreshWindow(`/`)", "M.getPrimaryWindow()??await ee(`/`)")
+    .replace("r=n??await M.createFreshWindow(e)", "r=n??await ee(e)");
+
+  const patched = applyPatchTwice(applyLinuxLaunchActionArgsPatch, source);
+
+  assert.match(patched, /codexLinuxHandleLaunchActionArgs/);
+  assert.match(patched, /let n=M\.getPrimaryWindow\(B\),r=n\?\?await ee\(e\);/);
+  assert.match(patched, /let e=M\.getPrimaryWindow\(B\),t=e\?\?await ee\(`\/`\);/);
+});
+
 test("prewarms the hotkey window after startup marker drift", () => {
   const launchPatched = applyPatchTwice(
     applyLinuxLaunchActionArgsPatch,
@@ -3168,6 +3187,51 @@ test("leaves already-null config write versions unchanged", () => {
   const patched = applyPatchTwice(applyLinuxConfigWriteVersionConflictPatch, source);
 
   assert.equal(patched, source);
+});
+
+test("extends app-server startup waits while state db backfill is running", () => {
+  const source = [
+    "var Js=`Please continue this conversation on the window where it was started.`,Ys=3e4,Xs=2e3;",
+    "class RequestClient{createRequest(e,t,n){let r=P(B()),i=n?.timeoutMs??0,a=Da(t),o=this.requestPromises.size,s=Date.now();return{request:{id:r,method:e,params:t},conversationId:a,pending:o,startedAtMs:s,timeoutMs:i}}}",
+    "function za(e){let t=La.safeParse(e);return t.success?new Ba(t.data):e}",
+    "function Np(e){if(e.startsWith(`Parse Error`))return{code:`restart-required`};let t=Mp(e);return t==null?e.startsWith(`codex-app-server-version-unsupported:`)?{code:`update-required`,minRequiredVersion:Dp,currentVersion:e.slice(37)}:{code:`connection-failed`,message:e}:{code:`restart-required`,currentVersion:t.currentVersion,installedVersion:t.installedVersion}}",
+  ].join("");
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyPatchTwice(applyLinuxAppServerBackfillWaitPatch, source),
+  );
+
+  assert.deepEqual(warnings, []);
+  assert.match(patched, /function codexLinuxIsStateDbBackfillMessage\(e\)/);
+  assert.match(patched, /function codexLinuxAppServerBackfillTimeoutMs\(e,t\)/);
+  assert.match(patched, /i=codexLinuxAppServerBackfillTimeoutMs\(e,i\);let a=Da\(t\)/);
+  assert.match(
+    patched,
+    /if\(codexLinuxIsStateDbBackfillMessage\(e\)\)return\{code:`connection-failed`,message:codexLinuxStateDbBackfillMessage\(e\)\}/,
+  );
+
+  const context = {};
+  vm.runInNewContext(
+    `${patched};result=Np("state db backfill is running at /home/user/.codex");startupTimeout=codexLinuxAppServerBackfillTimeoutMs("thread/start",3e4);turnTimeout=codexLinuxAppServerBackfillTimeoutMs("turn/start",3e4);`,
+    context,
+  );
+  assert.equal(context.result.code, "connection-failed");
+  assert.match(context.result.message, /state database backfill is still running/);
+  assert.equal(context.startupTimeout, 3e5);
+  assert.equal(context.turnTimeout, 3e4);
+});
+
+test("skips app-server timeout rewrite when the helper insertion anchor drifts", () => {
+  const source =
+    "class RequestClient{createRequest(e,t,n){let r=P(B()),i=n?.timeoutMs??0,a=Da(t),o=this.requestPromises.size;return{request:{id:r,method:e,params:t},conversationId:a,pending:o,timeoutMs:i}}}";
+
+  const { value: patched, warnings } = captureWarns(() =>
+    applyLinuxAppServerBackfillWaitPatch(source),
+  );
+
+  assert.equal(patched, source);
+  assert.match(warnings.join("\n"), /Could not insert app-server backfill wait helper/);
+  assert.doesNotMatch(patched, /codexLinuxAppServerBackfillTimeoutMs\(/);
 });
 
 test("adds Linux package updater behind the existing app updater manager", () => {
