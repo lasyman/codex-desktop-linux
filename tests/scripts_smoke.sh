@@ -325,7 +325,10 @@ SCRIPT
     assert_file_exists "$dist_dir/codex-desktop_2026.03.24.120000+deadbeef_amd64.deb"
     [ "$(cat "$capture_dir/dpkg-deb-threads")" = "6" ] \
         || fail "Expected MAX_BUILD_THREADS to reach dpkg-deb"
+    assert_file_exists "$pkg_root/DEBIAN/postinst"
     assert_file_exists "$pkg_root/DEBIAN/prerm"
+    assert_contains "$pkg_root/DEBIAN/postinst" "codex_ensure_user_service_running"
+    assert_contains "$pkg_root/DEBIAN/postinst" "codex_start_enabled_user_service"
     assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Name=New Window"
     assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Name=Check for Updates"
     assert_contains "$pkg_root/usr/share/applications/codex-desktop.desktop" "Name=Install Ready Update"
@@ -362,6 +365,8 @@ SCRIPT
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/plugins/openai-bundled/plugins/read-aloud/.mcp.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/.codex-linux/source-info.json"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh"
+    assert_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "is-enabled codex-update-manager.service"
+    assert_not_contains "$pkg_root/opt/codex-desktop/.codex-linux/codex-packaged-runtime.sh" "enable --now codex-update-manager.service"
     assert_file_exists "$pkg_root/opt/codex-desktop/.codex-linux/codex-desktop-entry-doctor.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/update-builder/packaging/linux/codex-desktop-entry-doctor.sh"
     assert_file_exists "$pkg_root/opt/codex-desktop/resources/node-runtime/bin/node"
@@ -767,6 +772,62 @@ SCRIPT
         _ "$helper"
 
     assert_file_not_exists "$service_link"
+}
+
+test_update_manager_service_helper_respects_disabled_service() {
+    info "Checking updater service helper respects disabled user service state"
+    local helper_log="$TMP_DIR/updater-service-helper.log"
+    local helper_state=""
+
+    # shellcheck source=packaging/linux/codex-update-manager-user-service.sh
+    . "$REPO_DIR/packaging/linux/codex-update-manager-user-service.sh"
+
+    codex_run_systemctl_user() {
+        local user_name="$1"
+        local runtime_dir="$2"
+        local bus="$3"
+        shift 3
+        printf '%s|%s|%s|%s\n' "$helper_state" "$user_name" "$runtime_dir" "$*" >> "$helper_log"
+
+        case "$*" in
+            "daemon-reload")
+                return 0
+                ;;
+            "is-active $SERVICE_NAME")
+                [ "$helper_state" = "active" ]
+                return
+                ;;
+            "is-enabled $SERVICE_NAME")
+                [ "$helper_state" = "enabled" ] || [ "$helper_state" = "active" ]
+                return
+                ;;
+            "start $SERVICE_NAME")
+                return 0
+                ;;
+            "enable --now $SERVICE_NAME")
+                return 0
+                ;;
+        esac
+
+        return 1
+    }
+
+    helper_state="disabled"
+    : > "$helper_log"
+    codex_start_one_enabled_user_service codexuser /run/user/1000 /run/user/1000/bus
+    assert_not_contains "$helper_log" "start $SERVICE_NAME"
+    assert_not_contains "$helper_log" "enable --now $SERVICE_NAME"
+
+    helper_state="enabled"
+    : > "$helper_log"
+    codex_start_one_enabled_user_service codexuser /run/user/1000 /run/user/1000/bus
+    assert_contains "$helper_log" "start $SERVICE_NAME"
+    assert_not_contains "$helper_log" "enable --now $SERVICE_NAME"
+
+    helper_state="disabled"
+    : > "$helper_log"
+    codex_ensure_one_user_service_running codexuser /run/user/1000 /run/user/1000/bus
+    assert_contains "$helper_log" "enable --now $SERVICE_NAME"
 }
 
 test_rpm_builder_smoke() {
@@ -3455,9 +3516,15 @@ EOF
     assert_contains "$REPO_DIR/updater/src/app.rs" "kdialog"
     assert_contains "$REPO_DIR/updater/src/app.rs" "zenity"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "CHROME_DESKTOP"
+    assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "is-enabled codex-update-manager.service"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "codex-update-manager-launch-check"
     assert_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "codex-update-manager check-now --if-stale"
+    assert_not_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "enable --now codex-update-manager.service"
     assert_not_contains "$REPO_DIR/packaging/linux/codex-packaged-runtime.sh" "restart codex-update-manager.service"
+    assert_contains "$REPO_DIR/packaging/linux/codex-update-manager-user-service.sh" "codex_start_enabled_user_service"
+    assert_contains "$REPO_DIR/packaging/linux/codex-update-manager.postinst" "codex_start_enabled_user_service"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.install" "codex_start_enabled_user_service"
+    assert_contains "$REPO_DIR/packaging/linux/codex-desktop.spec" "codex_start_enabled_user_service"
     assert_contains "$REPO_DIR/scripts/install-deps.sh" 'NODEJS_MAJOR="${NODEJS_MAJOR:-22}"'
     assert_contains "$REPO_DIR/scripts/install-deps.sh" "apt_nodejs_candidate_major"
     assert_contains "$REPO_DIR/scripts/install-deps.sh" "Installing distro Node.js/npm candidate"
@@ -3606,7 +3673,7 @@ test_side_by_side_launcher_identity() {
     assert_contains "$app_dir/start.sh" 'LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/$CODEX_LINUX_APP_ID"'
     XDG_CACHE_HOME="$workspace/cache" XDG_STATE_HOME="$workspace/state" XDG_RUNTIME_DIR="$workspace/runtime" bash "$app_dir/start.sh" --help >"$help_log"
     assert_contains "$help_log" "Launches the Codex CUA Lab app."
-    assert_contains "$help_log" "codex-cua-lab/launcher.log"
+    assert_contains "$help_log" "codex-cua-lab/launcher"
 
     ln -s "$app_dir/start.sh" "$bin_dir/codex-cua-lab"
     XDG_CACHE_HOME="$workspace/cache" XDG_STATE_HOME="$workspace/state" XDG_RUNTIME_DIR="$workspace/runtime" bash "$bin_dir/codex-cua-lab" --help >"$symlink_help_log"
@@ -6255,6 +6322,7 @@ main() {
     test_deb_builder_respects_package_identity
     test_deb_builder_without_updater
     test_no_updater_cleanup_helper_removes_inactive_user_enablement
+    test_update_manager_service_helper_respects_disabled_service
     test_rpm_builder_smoke
     test_pacman_builder_without_updater_transition_hook
     test_appimage_builder_smoke
