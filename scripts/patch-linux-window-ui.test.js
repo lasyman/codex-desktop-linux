@@ -34,6 +34,7 @@ const {
   applyLinuxChromeExtensionStatusPatch,
   applyLinuxChromeNativeHostRuntimePatch,
   applyLinuxChromePluginAutoInstallPatch,
+  applyLinuxTerminalUserPathPatch,
   applyLinuxAppUpdaterBridgePatch,
   applyLinuxAppUpdaterMenuPatch,
   applyLinuxAboutDialogPatch,
@@ -139,6 +140,8 @@ const workerBundlePrefix =
   "let i=require(`node:path`),o=require(`node:fs`);";
 const fileManagerBundle =
   "var lu=jl({id:`fileManager`,label:`Finder`,icon:`apps/finder.png`,kind:`fileManager`,darwin:{detect:()=>`open`,args:e=>il(e)},win32:{label:`File Explorer`,icon:`apps/file-explorer.png`,detect:uu,args:e=>il(e),open:async({path:e})=>du(e)}});function uu(){}";
+const terminalEnvBundle =
+  "var Q0=`xterm-256color`;var t={ $r(e){return e} };var Backend=class{isLocalTerminalSession(e){return e?.type===`local`}async getWorktreeShellEnvironmentForCwd(e){return null}async buildTerminalEnv(e,n,r){let i={...process.env};if(n!=null&&(i.CODEX_APP_TITLE=n),this.isLocalTerminalSession(r)){let t=await this.getWorktreeShellEnvironmentForCwd(e);if(t!=null){for(let e of t.exclude)delete i[e];Object.assign(i,t.set)}}return process.platform!==`win32`&&(i.TERM=Q0,delete i.TERMINFO,delete i.TERMINFO_DIRS),t.$r(i)}};";
 const alreadyOpaqueBackgroundBundle =
   "process.platform===`linux`?{backgroundColor:e?t:n,backgroundMaterial:null}:{backgroundColor:r,backgroundMaterial:null}";
 const opaqueBackgroundBundleWithDriftingGw =
@@ -720,6 +723,7 @@ test("default core patch descriptors are grouped and unique", () => {
     "linux-chat-search-hydration",
     "linux-file-manager",
     "linux-worker-file-manager",
+    "linux-terminal-user-path",
     "linux-tray",
     "linux-build-info-tray",
     "linux-single-instance",
@@ -791,6 +795,10 @@ test("default core patch descriptors are grouped and unique", () => {
   assert.equal(
     descriptors.find((descriptor) => descriptor.id === "linux-computer-use-native-desktop-apps")?.ciPolicy,
     "opt-in",
+  );
+  assert.equal(
+    descriptors.find((descriptor) => descriptor.id === "linux-terminal-user-path")?.ciPolicy,
+    "optional",
   );
   for (const id of [
     "linux-window-options",
@@ -1457,6 +1465,54 @@ test("adds Linux file manager support to the worker open target registry", () =>
   assert.match(patched, /i\.dirname\(t\)/);
   assert.doesNotMatch(patched, /open:async\(\{path:e\}\)=>\{let [^}]*require\(`node:fs`\)/);
   assert.match(patched, /import\(`electron`\)\)\.shell\.openPath\(t\)/);
+});
+
+test("restores the user PATH for Linux local terminal sessions", () => {
+  const source = `${mainBundlePrefix}${terminalEnvBundle}`;
+
+  const patched = applyPatchTwice(applyLinuxTerminalUserPathPatch, source);
+
+  assert.match(patched, /function codexLinuxRestoreUserTerminalPath/);
+  assert.match(patched, /CODEX_LINUX_USER_PATH/);
+  assert.match(
+    patched,
+    /process\.platform===`linux`&&this\.isLocalTerminalSession\(r\)&&codexLinuxRestoreUserTerminalPath\(i\)/,
+  );
+  assert.doesNotMatch(patched, /CODEX_LINUX_USER_PATH;n\(i\)/);
+
+  const helperSource = patched.match(
+    /function codexLinuxRestoreUserTerminalPath\(e\)\{[\s\S]*?return e\}/,
+  )?.[0];
+  assert.ok(helperSource);
+
+  const managedRuntime = "/opt/codex-desktop/resources/node-runtime";
+  const managedBin = `${managedRuntime}/bin`;
+  const runHelper = (terminalPath, processPath = `${managedBin}:/usr/bin:/bin`) => {
+    const terminalEnv = {
+      PATH: terminalPath,
+      CODEX_LINUX_USER_PATH: "/usr/bin:/bin",
+    };
+    vm.runInNewContext(`${helperSource};codexLinuxRestoreUserTerminalPath(terminalEnv);`, {
+      process: {
+        env: {
+          CODEX_LINUX_USER_PATH: "/usr/bin:/bin",
+          CODEX_MANAGED_NODE_RUNTIME_DIR: managedRuntime,
+          PATH: processPath,
+        },
+      },
+      terminalEnv,
+    });
+    return terminalEnv;
+  };
+
+  assert.deepEqual(runHelper(`${managedBin}:/usr/bin:/bin`), { PATH: "/usr/bin:/bin" });
+  assert.deepEqual(
+    runHelper(`/worktree/bin:${managedBin}:/custom/bin`, `${managedBin}:/usr/bin:/bin`),
+    { PATH: "/worktree/bin:/usr/bin:/bin:/custom/bin" },
+  );
+  assert.deepEqual(runHelper("/worktree/bin:/custom/bin"), {
+    PATH: "/worktree/bin:/custom/bin",
+  });
 });
 
 test("patchExtractedApp patches worker file manager support", () => {
@@ -7560,6 +7616,46 @@ test("criticalFailuresFromReport agrees with validateReport and skips non-applic
   assert.ok(failures.some((failure) => failure.startsWith("req-bad:")));
   assert.ok(!failures.some((failure) => failure.startsWith("req-not-applicable:")));
   assert.ok(!failures.some((failure) => failure.startsWith("opt-bad:")));
+});
+
+test("terminal user PATH patch drift is reported as optional", () => {
+  const coreRoot = fs.mkdtempSync(path.join(os.tmpdir(), "codex-terminal-path-optional-core-"));
+  const tempApp = fs.mkdtempSync(path.join(os.tmpdir(), "codex-terminal-path-optional-app-"));
+  try {
+    writeCorePatchFixture(coreRoot, "sample/terminal-path", [
+      "\"use strict\";",
+      "const { applyLinuxTerminalUserPathPatch } = require(",
+      `  ${JSON.stringify(path.join(__dirname, "patches", "main-process", "misc.js"))},`,
+      ");",
+      "module.exports = {",
+      "  id: \"linux-terminal-user-path\",",
+      "  phase: \"main-bundle\",",
+      "  ciPolicy: \"optional\",",
+      "  apply: applyLinuxTerminalUserPathPatch,",
+      "};",
+    ].join("\n"));
+
+    const buildDir = path.join(tempApp, ".vite", "build");
+    fs.mkdirSync(buildDir, { recursive: true });
+    fs.writeFileSync(path.join(buildDir, "main.js"), "async buildTerminalEnv(){return null}// node-pty");
+
+    const report = createPatchReport();
+    captureWarns(() => patchExtractedApp(tempApp, { report, corePatchRoot: coreRoot }));
+
+    const entry = report.patches.find((patch) => patch.name === "linux-terminal-user-path");
+    assert.equal(entry?.ciPolicy, "optional");
+    assert.equal(entry?.status, "skipped-optional");
+    assert.ok(
+      optionalDriftFromReport(report).some((drift) => drift.name === "linux-terminal-user-path"),
+      "terminal PATH drift should stay visible as optional drift",
+    );
+    assert.ok(
+      !criticalFailuresFromReport(report).some((failure) => failure.name === "linux-terminal-user-path"),
+    );
+  } finally {
+    fs.rmSync(coreRoot, { recursive: true, force: true });
+    fs.rmSync(tempApp, { recursive: true, force: true });
+  }
 });
 
 test("patchMainBundleSource survives a throwing optional patch without a report", () => {

@@ -3346,6 +3346,10 @@ if "if needs_cold_start;" not in runtime_body:
     raise SystemExit("second-instance handoff must skip CLI preflight")
 if 'run_cold_start_hooks' not in runtime_body:
     raise SystemExit("cold start must run feature-staged hooks before Electron launches")
+if 'export CODEX_LINUX_USER_PATH="${PATH:-}"' not in source:
+    raise SystemExit("launcher must capture the user PATH before prepending the managed Node runtime")
+if source.index('export CODEX_LINUX_USER_PATH="${PATH:-}"') > source.index('export PATH="$MANAGED_NODE_BIN_DIR:$PATH"'):
+    raise SystemExit("launcher must capture CODEX_LINUX_USER_PATH before mutating PATH for Electron")
 for name, body in (("prelaunch", prelaunch_hooks_body), ("cold-start", cold_start_hooks_body), ("launcher", launcher_hooks_body)):
     if 'CODEX_HOME="$CODEX_HOME"' not in body:
         raise SystemExit(f"launcher {name} hooks must receive resolved CODEX_HOME")
@@ -3742,6 +3746,7 @@ EOF
     assert_contains "$REPO_DIR/flake.nix" "https://static.crates.io/crates/"
     assert_contains "$REPO_DIR/flake.nix" "api/v1/crates/"
     assert_contains "$REPO_DIR/launcher/start.sh.template" "MANAGED_NODE_BIN_DIR"
+    assert_contains "$REPO_DIR/launcher/start.sh.template" "CODEX_LINUX_USER_PATH"
     assert_contains "$REPO_DIR/updater/src/builder.rs" "managed_node_bin_dirs"
     assert_contains "$REPO_DIR/scripts/build-rpm.sh" "stage_common_package_files"
     assert_contains "$REPO_DIR/scripts/build-rpm.sh" "PACKAGED_RUNTIME_SOURCE"
