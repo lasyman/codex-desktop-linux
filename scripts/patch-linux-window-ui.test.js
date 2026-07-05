@@ -1404,7 +1404,9 @@ function createModernNativeKeyboardShortcutsSettingsFixture() {
 // `settings-page-*.js` bundle then carries only the icon map, nav order, slug
 // groups, and visibility/loading switches. This is the layout that rendered the
 // Linux desktop nav entry with the page component injected as its icon.
-function createSplitRouteNativeKeyboardShortcutsSettingsFixture() {
+function createSplitRouteNativeKeyboardShortcutsSettingsFixture({
+  routeChunkName = "app-initial~app-main~automations-page-A.js",
+} = {}) {
   const extractedDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-split-route-shortcuts-"));
   const assetsDir = path.join(extractedDir, "webview", "assets");
   fs.mkdirSync(assetsDir, { recursive: true });
@@ -1454,7 +1456,7 @@ function createSplitRouteNativeKeyboardShortcutsSettingsFixture() {
   );
   // The hoisted lazy route map, assigned as a bare `FW={...}` inside an IIFE body.
   writeAsset(
-    "app-initial~app-main~automations-page-A.js",
+    routeChunkName,
     [
       "var Bn,Ya,Pr,FW,Xn=e((()=>{Bn=s(),Ya=t(f(),1),Pr=o(),",
       'FW={"general-settings":(0,Ya.lazy)(()=>Pr(()=>import(`./general-settings-A.js`).then(e=>({default:e.GeneralSettings})),__vite__mapDeps([1,2]))),',
@@ -4553,6 +4555,32 @@ test("adds Linux desktop settings when the lazy route map is hoisted into a sepa
     const secondResult = patchKeybindsSettingsAssets(extractedDir);
     assert.equal(secondResult.matched, true);
     assert.equal(secondResult.changed, 0);
+  } finally {
+    fs.rmSync(extractedDir, { recursive: true, force: true });
+  }
+});
+
+test("finds Linux desktop settings route map in hashed settings-page chunks", () => {
+  const routeChunkName = "app-initial~settings-page-A.js";
+  const { extractedDir, assetsDir } = createSplitRouteNativeKeyboardShortcutsSettingsFixture({
+    routeChunkName,
+  });
+  try {
+    const { value: result, warnings } = captureWarns(() => patchKeybindsSettingsAssets(extractedDir));
+
+    assert.equal(result.matched, true);
+    assert.deepEqual(warnings, []);
+    assert.equal(fs.existsSync(path.join(assetsDir, linuxDesktopSettingsAsset)), true);
+
+    const routeChunkSource = fs.readFileSync(path.join(assetsDir, routeChunkName), "utf8");
+    assert.match(
+      routeChunkSource,
+      /"linux-desktop":\(0,Ya\.lazy\)\(\(\)=>Pr\(\(\)=>import\(`\.\/linux-desktop-settings-linux\.js`\),\[\],import\.meta\.url\)\),"general-settings":/,
+    );
+
+    const settingsPageSource = fs.readFileSync(path.join(assetsDir, "settings-page-A.js"), "utf8");
+    assert.match(settingsPageSource, /"linux-desktop":wt,"general-settings":wt/);
+    assert.doesNotMatch(settingsPageSource, /codexLinuxDesktopSettings/);
   } finally {
     fs.rmSync(extractedDir, { recursive: true, force: true });
   }
