@@ -2086,6 +2086,18 @@ test("Linux remote-control status wait supports the current 26.707 app bundle", 
   assert.equal(applyLinuxRemoteControlStatusWaitPatch(patched), patched);
 });
 
+test("Linux remote-control status wait ignores matching atom initializer decoys", () => {
+  const decoy =
+    "var D,A,B,C;D=5e3,A=va(X,e=>null),B=va(X,e=>!1),C=ya(X,(e,{get:t})=>t(A,e));";
+  const patched = applyLinuxRemoteControlStatusWaitPatch(decoy + syntheticCurrentStatusWaitBundle());
+
+  assert.match(patched, /D=5e3,A=va\(X,e=>null\)/);
+  assert.match(
+    patched,
+    /F5t=typeof navigator!=`undefined`&&navigator\.userAgent\.includes\(`Linux`\)\?3e4:5e3/,
+  );
+});
+
 test("Linux remote-control settings UX patch warns when SSH release handling drifts after partial patching", () => {
   const source = (syntheticSettingsBundle() + syntheticSshInstallSettingsBundle()).replace(
     "installedCodexVersion:h",

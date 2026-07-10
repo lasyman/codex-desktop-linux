@@ -1393,8 +1393,19 @@ function applyLinuxRemoteControlStatusWaitPatch(source) {
     return source;
   }
 
-  const statusWaitRegex =
-    /\b([A-Za-z_$][\w$]*)=5e3(?=,[A-Za-z_$][\w$]*=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),e=>null\),[A-Za-z_$][\w$]*=\2\(\3,e=>!1\),[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\(\3,)/u;
+  const timeoutVariableMatch = source.match(
+    /setTimeout\(\(\)=>\{[^}]{0,300}Timed out waiting for remote control to connect[^}]{0,300}\},([A-Za-z_$][\w$]*)\)/u,
+  );
+  if (timeoutVariableMatch == null) {
+    console.warn("WARN: Could not find remote-control status timeout variable - skipping Linux remote-control status wait patch");
+    return source;
+  }
+
+  const timeoutVariable = timeoutVariableMatch[1];
+  const statusWaitRegex = new RegExp(
+    `\\b${escapeRegExp(timeoutVariable)}=5e3(?=,[A-Za-z_$][\\w$]*=([A-Za-z_$][\\w$]*)\\(([A-Za-z_$][\\w$]*),e=>null\\),[A-Za-z_$][\\w$]*=\\1\\(\\2,e=>!1\\),[A-Za-z_$][\\w$]*=[A-Za-z_$][\\w$]*\\(\\2,)`,
+    "u",
+  );
   if (!statusWaitRegex.test(source)) {
     console.warn("WARN: Could not find remote-control status wait needle - skipping Linux remote-control status wait patch");
     return source;
@@ -1402,7 +1413,7 @@ function applyLinuxRemoteControlStatusWaitPatch(source) {
 
   return source.replace(
     statusWaitRegex,
-    `$1=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)?3e4:5e3/*${REMOTE_CONTROL_STATUS_WAIT_MARKER}*/`,
+    `${timeoutVariable}=typeof navigator!=\`undefined\`&&navigator.userAgent.includes(\`Linux\`)?3e4:5e3/*${REMOTE_CONTROL_STATUS_WAIT_MARKER}*/`,
   );
 }
 
